@@ -214,6 +214,15 @@ The following are available for team matches only:
 * ``dire_logo``
 * ``dire_team_complete``
 
+*******************
+get_all_matches_for_user()
+*******************
+
+Tries to return a array containing match details for all matches for a user ID by querying for each hero.
+
+The max number of results returned by valve's API is 500, so if there are more than 500 matches for a certain hero, only the most recent 500 will be returned.
+
+
 ********************
 get_league_listing()
 ********************

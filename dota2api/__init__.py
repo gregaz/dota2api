@@ -9,6 +9,9 @@ __licence__ = "GPL"
 
 import json
 import collections
+import time
+from retrying import retry
+from tqdm import tqdm
 
 try:
     from urllib import urlencode
@@ -53,6 +56,82 @@ class Initialise(object):
             self.logger = None
 
         self.__format = "json"
+
+
+    def __get_all_match_history_in_batches(self, account_id=None, silently=False, initial_hist=None, **kwargs):
+        """Get all matches in batches of 100.
+            Retry in case of api errors"""
+
+        match_start_index = 0
+
+        if initial_hist == None:
+            hist = self.get_match_history_and_retry_on_failure(start_at_match_id=match_start_index,
+                                                           account_id=account_id, **kwargs)
+
+        remaining_matches = hist['total_results']
+        matches = []
+
+        while remaining_matches > 0:
+            remaining_matches = hist['results_remaining']
+            if not silently:
+                match_batch_iterable = tqdm(hist['matches'], desc='Loading batch of ' + str(hist['num_results']) + ' matches ')
+            else:
+                match_batch_iterable = hist['matches']
+
+            for eachMatch in match_batch_iterable:
+                time.sleep(1)
+                details = self.get_match_details_and_retry_on_failure(match_id=eachMatch['match_id'])
+                matches.append(details)
+
+            match_start_index = hist['matches'][-1]['match_id'] - 1
+            time.sleep(1)
+            hist = self.get_match_history_and_retry_on_failure(start_at_match_id=match_start_index,
+                                                               account_id=account_id)
+        return matches
+
+
+    def get_all_matches_for_user(self, account_id, silently=False):
+        """Returns a array containing match details for all matches for a user ID.
+            Since the valve api will only return 500 results per query,
+            the best way to do this is to get the results for each hero if
+            an account has more than 500 games played.
+            If there are more than 500 games for one hero, we will only be able
+            to retrieve the most recent 500 for that hero
+        """
+        hist = self.get_match_history_and_retry_on_failure(account_id=account_id)
+        matches = []
+
+        if hist['total_results'] < 500:
+            matches = self.__get_all_match_history_in_batches(account_id=account_id,silently=silently,initial_hist=hist)
+
+        else:
+            heroes = self.get_heroes()
+
+            if not silently:
+                heroes_iterable = tqdm(heroes['heroes'], desc='Getting matches for each hero ')
+            else:
+                heroes_iterable = heroes['heroes']
+            time.sleep(1)
+            for each_hero in heroes_iterable:
+                if not silently:
+                    print('\n')
+                    print('Getting matches for ' + each_hero['localized_name'])
+                hero_matches = self.__get_all_match_history_in_batches(account_id=account_id,silently=silently,hero_id=each_hero['id'])
+                matches.extend(hero_matches)
+
+        return matches
+
+    @retry(wait_random_min=5000, wait_random_max=60000, stop_max_attempt_number=5)
+    def get_match_history_and_retry_on_failure(self, start_at_match_seq=None, account_id=None, **kwargs):
+        """Calls get_match_history, but retries a maximum of 5 times on errors.
+        This is useful for dealing with 503 errors from Valve's api"""
+        return self.get_match_history(start_at_match_seq=start_at_match_seq, account_id=account_id,  **kwargs)
+
+    @retry(wait_random_min=5000, wait_random_max=60000, stop_max_attempt_number=5)
+    def get_match_details_and_retry_on_failure(self, match_id=None, **kwargs):
+        """Calls get_match_details, but retries a maximum of 5 times on errors.
+        This is useful for dealing with 503 errors from Valve's api"""
+        return self.get_match_details(match_id=match_id, **kwargs)
 
     def get_match_history(self, account_id=None, **kwargs):
         """Returns a dictionary containing a list of the most recent Dota matches
